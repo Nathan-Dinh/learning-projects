@@ -1,0 +1,141 @@
+services:
+  # --- Control Plane ---
+  controlplane:
+    build:
+      context: ServiceMesh/src/csharp_ControlPlane
+    ports:
+      - "5144:8080"
+    environment:
+      - ASPNETCORE_URLS=http://+:8080
+      - Routes__0__Source=PDF_Handler
+      - Routes__0__Destination=PDF_Processing
+      - Routes__0__TargetHost=sidecar-processing
+      - Routes__0__TargetPort=8080
+      - Routes__1__Source=PDF_Processing
+      - Routes__1__Destination=Storage
+      - Routes__1__TargetHost=sidecar-storage
+      - Routes__1__TargetPort=8080
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/ || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+    networks:
+      - mesh
+
+  # --- Sidecar for Handler (A) ---
+  sidecar-handler:
+    build:
+      context: ServiceMesh/src/csharp_Sidecar
+    ports:
+      - "6001:8080"
+    environment:
+      - ASPNETCORE_URLS=http://+:8080
+      - Sidecar__ServiceName=PDF_Handler
+      - Sidecar__LocalServiceUrl=http://handler:8080
+      - Sidecar__ControlPlaneUrl=http://controlplane:8080
+      - Sidecar__RefreshSeconds=30
+    depends_on:
+      controlplane:
+        condition: service_healthy
+      handler:
+        condition: service_started
+    networks:
+      - mesh
+
+  # --- Sidecar for Processing (B) ---
+  sidecar-processing:
+    build:
+      context: ServiceMesh/src/csharp_Sidecar
+    ports:
+      - "6002:8080"
+    environment:
+      - ASPNETCORE_URLS=http://+:8080
+      - Sidecar__ServiceName=PDF_Processing
+      - Sidecar__LocalServiceUrl=http://processing:8080
+      - Sidecar__ControlPlaneUrl=http://controlplane:8080
+      - Sidecar__RefreshSeconds=30
+    depends_on:
+      controlplane:
+        condition: service_healthy
+      processing:
+        condition: service_started
+    networks:
+      - mesh
+
+  # --- Sidecar for Storage (C) ---
+  sidecar-storage:
+    build:
+      context: ServiceMesh/src/csharp_Sidecar
+    ports:
+      - "6003:8080"
+    environment:
+      - ASPNETCORE_URLS=http://+:8080
+      - Sidecar__ServiceName=Storage
+      - Sidecar__LocalServiceUrl=http://storage:8080
+      - Sidecar__ControlPlaneUrl=http://controlplane:8080
+      - Sidecar__RefreshSeconds=30
+    depends_on:
+      controlplane:
+        condition: service_healthy
+      storage:
+        condition: service_started
+    networks:
+      - mesh
+
+  # --- Service A: PDFHandler ---
+  handler:
+    build:
+      context: ServiceMesh/src/csharp_PDFHandler
+    ports:
+      - "5001:8080"
+    environment:
+      - ASPNETCORE_URLS=http://+:8080
+      - Service__Name=PDF_Handler
+      - Service__SidecarUrl=http://sidecar-handler:8080
+      - ServiceUrls__Processing=PDF_Processing
+    networks:
+      - mesh
+
+  # --- Service B: PDF Processing ---
+  processing:
+    build:
+      context: ServiceMesh/src/csharp_PDF_Processing
+    ports:
+      - "5002:8080"
+    environment:
+      - ASPNETCORE_URLS=http://+:8080
+      - Service__Name=PDF_Processing
+      - Service__SidecarUrl=http://sidecar-processing:8080
+      - ServiceUrls__Storage=Storage
+    networks:
+      - mesh
+
+  # --- Service C: Storage ---
+  storage:
+    build:
+      context: ServiceMesh/src/csharp_Storage
+    ports:
+      - "5003:8080"
+    environment:
+      - ASPNETCORE_URLS=http://+:8080
+      - Service__Name=Storage
+      - Service__SidecarUrl=http://sidecar-storage:8080
+    networks:
+      - mesh
+
+  # --- Vue Frontend ---
+  frontend:
+    build:
+      context: ServiceMesh/src/vue-web-pdf
+    ports:
+      - "5173:80"
+    depends_on:
+      - handler
+    networks:
+      - mesh
+
+networks:
+  mesh:
+    driver: bridge
